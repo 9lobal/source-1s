@@ -1,0 +1,3 @@
+ЯС = Новый COMОбъект("MSScriptControl.ScriptControl");
+ЯС.Language = "javascript";
+ВремяВМиллисекундах = ЯС.Eval("new Date().getTime()");
