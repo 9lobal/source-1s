@@ -1,6 +1,7 @@
+&НаКлиенте
 Функция ПолучитьТекстБуфераОбмена() Экспорт
 #Если Клиент Тогда
-    Объект = Новый COMОбъект("htmlfile");
-    Возврат Объект.ParentWindow.ClipboardData.Getdata("Text");
+    _Объект = Новый COMОбъект("htmlfile");
+    Возврат _Объект.ParentWindow.ClipboardData.Getdata("Text");
 #КонецЕсли
 КонецФункции
