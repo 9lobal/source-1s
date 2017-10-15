@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html xmlns='http://www.w3.org/1999/xhtml'>
+<head>
+    <title>Быстрый старт. Размещение интерактивной карты на странице</title>
+    <meta http-equiv='Content-Type' content='text/html; charset=utf-8' />
+    <script src='https://api-maps.yandex.ru/2.0-stable/?load=package.standard&lang=ru-RU' type='text/javascript'></script>
+    <script type='text/javascript'>
+        ymaps.ready(init);
+        var myMap, 
+            myPlacemark;
+        function init(){ 
+            myMap = new ymaps.Map ('map', {
+                center: [56.32, 43.99],
+                zoom: 7
+            }); 
+            
+            myPlacemark = new ymaps.Placemark([56.32, 43.99], {
+                hintContent: 'Москва!',
+                balloonContent: 'Столица России'
+            });
+            
+            myMap.geoObjects.add(myPlacemark);
+			myMap.controls.add('zoomControl');
+			myMap.events.add('click', function (e) {
+			if (!myMap.balloon.isOpen()) {
+				var coords = e.get('coordPosition');
+				myMap.balloon.open(coords, {
+					contentHeader:'Событие!',
+					contentBody:'<p>Кто-то щелкнул по карте.</p>' +
+						'<p>Координаты щелчка: ' + [
+						coords[0].toPrecision(6),
+						coords[1].toPrecision(6)
+						].join(', ') + '</p>',
+					contentFooter:'<sup>Щелкните еще раз</sup>'
+				});
+			}
+			else {
+				myMap.balloon.close();
+			}
+			});
+        }
+    </script>
+</head>
+<body>
+    <div id='map' style='width: 600px; height: 400px'></div>
+</body>
+</html>
