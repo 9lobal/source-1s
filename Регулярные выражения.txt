@@ -1,0 +1,14 @@
+RegExp = Новый COMОбъект("VBScript.RegExp");
+RegExp.IgnoreCase = Истина;
+RegExp.Global = Истина; 
+RegExp.MultiLine = Истина;
+
+RegExp.Pattern = "[^""]//.*$";
+ТекстДляОбработки = RegExp.Replace(ТекстДляОбработки, "");
+
+RegExp.MultiLine = False;
+RegExp.Pattern = "((ВЫБРАТЬ)[^;]*|(УНИЧТОЖИТЬ)[^;]*)";
+MC = RegExp.Execute(ТекстДляОбработки);
+Для Каждого M Из MC Цикл
+	ПакетЗапросов.Добавить(M.Value);
+КонецЦикла;
