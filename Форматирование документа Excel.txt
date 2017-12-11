@@ -1,0 +1,25 @@
+ТабДок = ФормаПечати.ПечатныйДокумент;
+ИмяВрФайла = ПолучитьИмяВременногоФайла(".xls");
+ТабДок.Записать(ИмяВрФайла, ТипФайлаТабличногоДокумента.XLS);
+MsExcel = Новый COMОбъект("Excel.Application"); 						// Excel
+MsExcel.Visible = 0;
+MsExcel.DisplayAlerts = 0;
+Попытка
+	ExcelApplication = MsExcel.Application; 				// Excel.Application
+	ExcelApplication.Visible = 0;
+	КнигаExcel = ExcelApplication.Workbooks.Open(ИмяВрФайла); 			// Excel.Workbook - рабочая книга
+	ЛистExcel = КнигаExcel.WorkSheets.Item(1);
+	ЛистExcel.PageSetup.Zoom = Ложь;
+	ЛистExcel.PageSetup.LeftMargin = 10;  //Размешать не более чем на 1 страницу по ширине  
+	ЛистExcel.PageSetup.RightMargin = 10;  //Размешать не более чем на 1 страницу по ширине  
+	ЛистExcel.PageSetup.TopMargin = 10;  //Размешать не более чем на 1 страницу по ширине  
+	ЛистExcel.PageSetup.BottomMargin = 10;  //Размешать не более чем на 1 страницу по ширине  
+	ЛистExcel.PageSetup.FitToPagesWide = 1;  //Размешать не более чем на 1 страницу по ширине  
+	ЛистExcel.PageSetup.FitToPagesTall = Ложь; //Снимаем привязку масштаба к количеству страниц по высоте.
+	ExcelApplication.Visible = 1;
+	ExcelApplication = Неопределено;
+Исключение
+	Сообщить(ОписаниеОшибки());
+	ExcelApplication.Quit();
+КонецПопытки;
+MsExcel = Неопределено;
