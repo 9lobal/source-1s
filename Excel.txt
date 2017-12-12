@@ -11,8 +11,9 @@ ExcelApplication.Visible = 0;
 КнигаExcel.Worksheets(1).PageSetup.LeftMargin = 5;
 КнигаExcel.Worksheets(1).PageSetup.RightMargin = 5;
 // Размешать не более чем на 1 страницу по ширине  
+КнигаExcel.Worksheets(1).PageSetup.Zoom = false;
 КнигаExcel.Worksheets(1).PageSetup.FitToPagesWide = 1;
-КнигаExcel.Worksheets(1).PageSetup.FitToPagesTall = Ложь;
+КнигаExcel.Worksheets(1).PageSetup.FitToPagesTall = false;
 КнигаExcel.SaveAs(Путь, 18);
 MsExcel.Quit(); // Закрытие приложения
 MsExcel = Неопределено; // Обнуление переменной
