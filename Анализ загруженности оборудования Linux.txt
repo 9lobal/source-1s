@@ -4,3 +4,10 @@ vmstat -n 15 480 > results.txt
 //480 - количество повторений
 //сбор данных за 2 часа
 cat results.txt | tail -n 10 | awk '{sum+=$13+$14;count+=1} END {print "Sum=" sum " count=" count " avg=" sum/count}'
+
+###
+
+pktstat -T -B -i eth0
+//-T - общая статистика
+//-B - в байтах
+//-i eth0 - интерфейс eth0
