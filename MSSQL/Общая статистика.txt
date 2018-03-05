@@ -406,7 +406,7 @@ where
  status,
  [IO] = (reads + logical_reads + writes),
  cpu_time,
- wnit_resourse,
+ wait_resource,
  wait_time,
  wait_type,
  [Query] = qt.text,
