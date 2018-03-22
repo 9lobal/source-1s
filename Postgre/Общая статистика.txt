@@ -1,0 +1,373 @@
+-- Использование буферного кеша Postgres
+SELECT
+'total', pg_size_pretty(count(*) * (SELECT current_setting('block_size')::int))
+FROM pg_buffercache
+UNION SELECT
+'dirty', pg_size_pretty(count(*) * (SELECT current_setting('block_size')::int))
+FROM pg_buffercache
+WHERE isdirty
+UNION SELECT
+'clear', pg_size_pretty(count(*) * (SELECT current_setting('block_size')::int))
+FROM pg_buffercache
+WHERE NOT isdirty
+UNION SELECT
+'used', pg_size_pretty(count(*) * (SELECT current_setting('block_size')::int))
+FROM pg_buffercache
+WHERE reldatabase IS NOT NULL
+UNION SELECT
+'free',pg_size_pretty(count(*) * (SELECT current_setting('block_size')::int))
+FROM pg_buffercache
+WHERE reldatabase IS NULL;
+SELECT
+d.datname,
+pg_size_pretty(pg_database_size(d.datname)) AS database_size,
+pg_size_pretty(count(b.bufferid) * (SELECT current_setting('block_size')::int)) AS size_in_shared_buffers,
+round((100 * count(b.bufferid) / (SELECT setting FROM pg_settings WHERE name
+= 'shared_buffers')::decimal),2) AS pct_of_shared_buffers
+FROM pg_buffercache b
+JOIN pg_database d ON b.reldatabase = d.oid
+WHERE b.reldatabase IS NOT NULL
+GROUP BY 1 ORDER BY 4 DESC LIMIT 10;
+
+-- Нагрузка, создаваемая запросами Postgres
+SELECT
+pg_database.datname AS Database,
+pg_stat_statements.query AS Query,
+pg_stat_statements.calls AS ExecutionCount,
+pg_stat_statements.total_time ExecutionTime,
+pg_stat_statements.shared_blks_read + pg_stat_statements.shared_blks_written AS Memory,
+pg_stat_statements.local_blks_read + pg_stat_statements.local_blks_written AS IO,
+pg_stat_statements.temp_blks_read + pg_stat_statements.temp_blks_written AS Temp
+
+FROM
+pg_stat_statements AS pg_stat_statements
+INNER JOIN pg_database AS pg_database
+ON pg_database.oid = pg_stat_statements.dbid
+ORDER BY
+ExecutionTime DESC
+with s AS (SELECT
+CASE WHEN sum(total_time) = 0 THEN 1 ELSE sum(total_time) END AS sum_time,
+CASE WHEN sum(blk_read_time+blk_write_time) = 0 THEN 1 ELSE sum(blk_read_time+blk_write_time) END as sum_iotime,
+CASE WHEN sum(total_time-blk_read_time-blk_write_time) = 0 THEN 1 ELSE sum(total_time-blk_read_time-blk_write_time)
+END as sum_cputime,
+CASE WHEN sum(calls) = 0 THEN 1 ELSE sum(calls) END AS sum_calls,
+CASE WHEN sum(rows) = 0 THEN 1 ELSE sum(rows) END as sum_rows
+FROM pg_stat_statements
+)
+SELECT
+'all_users@all_databases' as "user@database",
+100 AS time_percent,
+100 AS iotime_percent,
+100 AS cputime_percent,
+(sum_time/1000)*'1 second'::interval as total_time,
+(sum_cputime/sum_calls)::numeric(20, 2) AS avg_cpu_time_ms,
+(sum_iotime/sum_calls)::numeric(20, 2) AS avg_io_time_ms,
+sum_calls as calls,
+100 AS calls_percent,
+sum_rows as rows,
+100 as row_percent,
+'all_queries' as query
+FROM s
+UNION ALL
+SELECT
+(select rolname from pg_roles where oid = p.userid) || '@' || (select datname from pg_database where oid
+(100*total_time/(SELECT sum_time FROM s))::numeric(20, 2) AS time_percent,
+(100*(blk_read_time+blk_write_time)/(SELECT sum_iotime FROM s))::numeric(20, 2) AS iotime_percent,
+(100*(total_time-blk_read_time-blk_write_time)/(SELECT sum_cputime FROM s))::numeric(20, 2) AS cputime_percent,
+(total_time/1000)*'1 second'::interval as total_time,
+((total_time-blk_read_time-blk_write_time)/calls)::numeric(20, 2) AS avg_cpu_time_ms,
+((blk_read_time+blk_write_time)/calls)::numeric(20, 2) AS avg_io_time_ms,
+calls,
+(100*calls/(SELECT sum_calls FROM s))::numeric(20, 2) AS calls_percent,
+rows,
+(100*rows/(SELECT sum_rows from s))::numeric(20, 2) AS row_percent,
+query
+FROM pg_stat_statements p
+WHERE
+(total_time-blk_read_time-blk_write_time)/(SELECT sum_cputime FROM s)>=0.005
+UNION ALL
+SELECT
+'all_users@all_databases' as "user@database",
+(100*sum(total_time)/(SELECT sum_time FROM s))::numeric(20, 2) AS time_percent,
+(100*sum(blk_read_time+blk_write_time)/(SELECT sum_iotime FROM s))::numeric(20, 2) AS iotime_percent,
+(100*sum(total_time-blk_read_time-blk_write_time)/(SELECT sum_cputime FROM s))::numeric(20, 2) AS cputime_percent,
+(sum(total_time)/1000)*'1 second'::interval,
+(sum(total_time-blk_read_time-blk_write_time)/sum(calls))::numeric(10, 3) AS avg_cpu_time_ms,
+(sum(blk_read_time+blk_write_time)/sum(calls))::numeric(10, 3) AS avg_io_time_ms,
+sum(calls),
+(100*sum(calls)/(SELECT sum_calls FROM s))::numeric(20, 2) AS calls_percent,
+sum(rows),
+(100*sum(rows)/(SELECT sum_rows from s))::numeric(20, 2) AS row_percent,
+'other' AS query
+FROM pg_stat_statements p
+WHERE
+(total_time-blk_read_time-blk_write_time)/(SELECT sum_cputime FROM s)<0.005 ORDER BY 4 DESC;
+
+-- Использование индексов
+SELECT
+t.tablename,
+indexname,
+c.reltuples AS num_rows,
+pg_size_pretty(pg_relation_size(quote_ident(t.tablename)::text)) AS table_size,
+pg_size_pretty(pg_relation_size(quote_ident(indexrelname)::text)) AS index_size,
+CASE WHEN indisunique THEN 'Y' ELSE 'N' END AS UNIQUE,
+idx_scan AS number_of_scans, idx_tup_read AS tuples_read, idx_tup_fetch AS tuples_fetched
+FROM pg_tables t
+LEFT OUTER JOIN pg_class c ON t.tablename=c.relname
+LEFT OUTER JOIN
+( SELECT c.relname AS ctablename, ipg.relname AS indexname, x.indnatts AS number_of_columns,
+idx_scan, idx_tup_read, idx_tup_fetch, indexrelname, indisunique FROM pg_index x
+JOIN pg_class c ON c.oid = x.indrelid JOIN pg_class ipg ON ipg.oid = x.indexrelid
+JOIN pg_stat_all_indexes psai ON x.indexrelid = psai.indexrelid )
+AS foo
+ON t.tablename = foo.ctablename
+WHERE t.schemaname='public'
+ORDER BY 1,2;
+--------------------------------------------------------------
+SELECT
+idstat.relname AS table_name,
+indexrelname AS index_name,
+idstat.idx_scan AS times_used,
+pg_size_pretty(pg_relation_size(tabstat.relid)) AS table_size,
+pg_size_pretty(pg_relation_size(indexrelid)) AS index_size,
+n_tup_upd + n_tup_ins + n_tup_del as num_writes,
+indexdef AS definition
+FROM
+pg_stat_user_indexes AS idstat
+JOIN pg_indexes ON indexrelname = indexname
+JOIN pg_stat_user_tables AS tabstat ON idstat.relname = tabstat.relname
+WHERE
+idstat.idx_scan < 200 AND indexdef !~* 'unique' ORDER BY idstat.relname, indexrelname; -------------------------------------------------------------- WITH table_scans as ( SELECT relid, tables.idx_scan + tables.seq_scan as all_scans, ( tables.n_tup_ins + tables.n_tup_upd + tables.n_tup_del ) as writes, pg_relation_size(relid) as table_size FROM pg_stat_user_tables as tables ), all_writes as ( SELECT sum(writes) as total_writes FROM table_scans ), indexes as ( SELECT idx_stat.relid, idx_stat.indexrelid, idx_stat.schemaname, idx_stat.relname as tablename, idx_stat.indexrelname as indexname, idx_stat.idx_scan, pg_relation_size(idx_stat.indexrelid) as index_bytes, indexdef ~* 'USING btree' AS idx_is_btree FROM pg_stat_user_indexes as idx_stat JOIN pg_index USING (indexrelid) JOIN pg_indexes as indexes ON idx_stat.schemaname = indexes.schemaname AND idx_stat.relname = indexes.tablename AND idx_stat.indexrelname = indexes.indexname WHERE pg_index.indisunique = FALSE ), index_ratios AS ( SELECT schemaname, tablename, indexname, idx_scan, all_scans, round(( CASE WHEN all_scans = 0 THEN 0.0::NUMERIC ELSE idx_scan::NUMERIC/all_scans * 100 END),2) as index_scan_pct, writes, round((CASE WHEN writes = 0 THEN idx_scan::NUMERIC ELSE idx_scan::NUMERIC/writes END),2) as scans_per_write, pg_size_pretty(index_bytes) as index_size, pg_size_pretty(table_size) as table_size, idx_is_btree, index_bytes FROM indexes JOIN table_scans USING (relid) ), index_groups AS ( SELECT 'Never Used Indexes' as reason, *, 1 as grp FROM index_ratios WHERE idx_scan = 0 and idx_is_btree UNION ALL SELECT 'Low Scans, High Writes' as reason, *, 2 as grp FROM index_ratios WHERE scans_per_write <= 1 and index_scan_pct < 10 and idx_scan > 0
+and writes > 100
+and idx_is_btree
+UNION ALL
+SELECT 'Seldom Used Large Indexes' as reason, *, 3 as grp
+FROM index_ratios
+WHERE
+index_scan_pct < 5 and scans_per_write > 1
+and idx_scan > 0
+and idx_is_btree
+and index_bytes > 100000000
+UNION ALL
+SELECT 'High-Write Large Non-Btree' as reason, index_ratios.*, 4 as grp
+FROM index_ratios, all_writes
+WHERE
+( writes::NUMERIC / total_writes ) > 0.02
+AND NOT idx_is_btree
+AND index_bytes > 100000000
+ORDER BY grp, index_bytes DESC )
+SELECT reason, schemaname, tablename, indexname,
+index_scan_pct, scans_per_write, index_size, table_size
+FROM index_groups;
+
+-- Отсутствие индексов
+SELECT
+relname,
+seq_scan - coalesce(idx_scan, 0) AS too_much_seq,
+case when seq_scan - coalesce(idx_scan, 0) > 0 THEN 'Нет индекса?' ELSE 'OK' END AS Message,
+pg_relation_size(relname::regclass) AS rel_size,
+seq_scan,
+coalesce(idx_scan, 0) AS idx_scan
+FROM
+pg_stat_all_tables
+WHERE
+schemaname='public'
+AND pg_relation_size(relname::regclass)>10000 -- ограничение на размер анализируемых таблиц
+ORDER BY
+too_much_seq DESC;
+
+-- Базы данных с максимальным IO
+SELECT
+pg_stat_database.datname AS DatabaseName,
+MAX(pg_stat_database.tup_returned) AS TotalReads,
+MAX(pg_stat_database.tup_inserted + pg_stat_database.tup_updated + pg_stat_database.tup_deleted) AS TotalWrites,
+MAX(pg_stat_database.tup_returned + pg_stat_database.tup_inserted + pg_stat_database.tup_updated
++ pg_stat_database.tup_deleted) AS IO,
+SUM(pg_stat_statements.calls) AS ExecutionCount
+
+FROM
+pg_catalog.pg_stat_database AS pg_stat_database
+LEFT OUTER JOIN pg_stat_statements AS pg_stat_statements
+ON pg_stat_statements.dbid = pg_stat_database.datid
+GROUP BY
+pg_stat_database.datname
+ORDER BY
+IO Desc
+
+-- Размер временных таблиц
+select relnamespace, sum(relpages::bigint*8192), pg_size_pretty(sum(relpages::bigint*8192))
+from pg_class where relname like 'tt%' group by 1 order by 2 desc;
+select sum(relpages::bigint*8192), pg_size_pretty(sum(relpages::bigint*8192)) from pg_class where relname like 'tt%';
+
+-- Таблицы с максимальным пустым местом
+-- установка расширения
+create extension pg_freespacemap;
+select
+result.table_name,
+result.freespace as fororder,
+pg_size_pretty(result.size) as size,
+pg_size_pretty(result.freespace) as freespace,
+result.freespace * 100 / result.size as percent_free
+from
+(select
+t.table_name,
+pg_total_relation_size(t.table_name) as size,
+sum(s.avail) as freespace
+from
+(select table_name from information_schema.tables where table_schema = 'public') as t,
+LATERAL pg_freespace(t.table_name) as s
+group by
+t.table_name) as result
+order by
+fororder desc
+limit 20;
+
+-- Процент попадания в кеш
+SELECT
+round(100 * sum(blks_hit) / sum(blks_hit + blks_read), 3) as cache_hit_ratio
+FROM pg_stat_database;
+
+-- Размер таблицы
+select pg_size_pretty(pg_relation_size('table name'));
+
+-- Размер базы данных
+select pg_size_pretty(pg_database_size(current_database()));
+
+-- Транзакции, ожидающие на блокировках
+SELECT blocked_locks.pid AS blocked_pid,
+blocked_activity.usename AS blocked_user,
+blocking_locks.pid AS blocking_pid,
+blocking_activity.usename AS blocking_user,
+blocked_activity.query AS blocked_statement,
+blocking_activity.query AS current_statement_in_blocking_process,
+blocked_activity.application_name AS blocked_application,
+blocking_activity.application_name AS blocking_application
+FROM pg_catalog.pg_locks blocked_locks
+JOIN pg_catalog.pg_stat_activity blocked_activity ON blocked_activity.pid = blocked_locks.pid
+JOIN pg_catalog.pg_locks blocking_locks
+ON blocking_locks.locktype = blocked_locks.locktype
+AND blocking_locks.DATABASE IS NOT DISTINCT FROM blocked_locks.DATABASE
+AND blocking_locks.relation IS NOT DISTINCT FROM blocked_locks.relation
+AND blocking_locks.page IS NOT DISTINCT FROM blocked_locks.page
+AND blocking_locks.tuple IS NOT DISTINCT FROM blocked_locks.tuple
+AND blocking_locks.virtualxid IS NOT DISTINCT FROM blocked_locks.virtualxid
+AND blocking_locks.transactionid IS NOT DISTINCT FROM blocked_locks.transactionid
+AND blocking_locks.classid IS NOT DISTINCT FROM blocked_locks.classid
+AND blocking_locks.objid IS NOT DISTINCT FROM blocked_locks.objid
+AND blocking_locks.objsubid IS NOT DISTINCT FROM blocked_locks.objsubid
+AND blocking_locks.pid != blocked_locks.pid
+JOIN pg_catalog.pg_stat_activity blocking_activity ON blocking_activity.pid = blocking_locks.pid
+WHERE NOT blocked_locks.GRANTED;
+
+-- Неустановленные блокировки
+SELECT relation::regclass, * FROM pg_locks WHERE NOT GRANTED;
+
+-- Список текущих блокировок
+SELECT
+l.mode,
+d.datname,
+c.relname,
+l.granted,
+l.transactionid
+FROM
+pg_locks AS l
+LEFT JOIN pg_database AS d ON l.database= d.oid
+LEFT JOIN pg_class AS c ON l.relation = c.oid;
+
+-- Выполняющиеся запросы с их продолжительностью
+SELECT
+st.state, st.*
+FROM
+pg_stat_activity as st
+where st.state = 'active'
+
+-- Пользователи блокирующие конкретную таблицу
+select a.usename, t.relname, a.current_query, mode from pg_locks l inner join pg_stat_activity a on a.procpid = l.pid inner join pg_stat_all_tables t on t.relid=l.relation where t.relname = ‘tablename’;
+
+select relation::regclass, mode, a.usename, granted, pid from pg_locks l inner join pg_stat_activity a on a.procpid = l.pid where not mode = ‘AccessShareLock’ and relation is not null;
+
+-- Запросы с эксклюзивными блокировками
+select a.usename, a.current_query, mode from pg_locks l inner join pg_stat_activity a on a.procpid = l.pid where mode ilike ‘%exclusive%’;
+
+-- Количество блокировок по пользователям
+select a.usename, count(l.pid) from pg_locks l inner join pg_stat_activity a on a.procpid = l.pid where not(mode = ‘AccessShareLock’) group by a.usename;
+
+-- Количество подключений по пользователям
+select count(usename), usename from pg_stat_activity group by usename order by count(usename) desc;
+
+-- Восстановить БД из дампа
+psql —host=localhost —username=someuser -f /path/to/pgdumpall.sql
+
+-- Блокировки БД по пользователям
+select a.usename, count(l.pid) from pg_locks l inner join pg_stat_activity a on a.procpid = l.pid where not(mode = ‘AccessShareLock’) group by a.usename;
+
+-- Вывести все таблицы, размером больше 10 Мб
+SELECT tableName, pg_size_pretty(pg_total_relation_size(CAST(tablename as text))) as size
+from pg_tables
+where tableName not like ‘sql_%’ and pg_size_pretty(pg_total_relation_size(CAST(tablename as text))) like ‘%MB%’;
+
+-- Определение размеров таблиц
+SELECT tableName, pg_size_pretty(pg_total_relation_size(CAST(tablename as text))) as size
+from pg_tables
+where tableName not like ‘sql_%’
+order by size;
+
+или
+
+SELECT
+table_name,
+pg_size_pretty(table_size) AS table_size,
+pg_size_pretty(indexes_size) AS indexes_size,
+pg_size_pretty(total_size) AS total_size
+FROM (
+SELECT
+table_name,
+pg_table_size(table_name) AS table_size,
+pg_indexes_size(table_name) AS indexes_size,
+pg_total_relation_size(table_name) AS total_size
+FROM (
+SELECT ('"' || table_schema || '"."' || table_name || '"') AS table_name
+FROM information_schema.tables
+) AS all_tables
+ORDER BY total_size DESC
+) AS pretty_sizes
+
+или
+
+Размер таблиц и индексов
+
+SELECT
+t.tablename,
+indexname,
+c.reltuples::integer AS num_rows,
+pg_size_pretty(pg_relation_size(quote_ident(t.tablename)::text)) AS table_size,
+pg_size_pretty(pg_relation_size(quote_ident(indexrelname)::text)) AS index_size,
+CASE WHEN x.is_unique = 1 THEN 'Y'
+ELSE 'N'
+END AS UNIQUE,
+idx_scan AS number_of_scans,
+idx_tup_read AS tuples_read,
+idx_tup_fetch AS tuples_fetched
+FROM pg_tables t
+LEFT OUTER JOIN pg_class c ON t.tablename=c.relname
+LEFT OUTER JOIN
+(SELECT indrelid,
+max(CAST(indisunique AS integer)) AS is_unique
+FROM pg_index
+GROUP BY indrelid) x
+ON c.oid = x.indrelid
+LEFT OUTER JOIN
+( SELECT c.relname AS ctablename, ipg.relname AS indexname, x.indnatts AS number_of_columns,
+idx_scan, idx_tup_read, idx_tup_fetch,indexrelname FROM pg_index x
+JOIN pg_class c ON c.oid = x.indrelid
+JOIN pg_class ipg ON ipg.oid = x.indexrelid
+JOIN pg_stat_all_indexes psai ON x.indexrelid = psai.indexrelid )
+AS foo
+ON t.tablename = foo.ctablename
+WHERE t.schemaname='public'
+ORDER BY pg_relation_size(quote_ident(indexrelname)::text) desc;
+
+-- утилиты для настройки в зависимости от аппаратных ресурсов
+http://pgtune.leopard.in.ua/
+
+-- 
