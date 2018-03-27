@@ -421,3 +421,84 @@ where
 where
 	qs.status in ('running','suspended','runnable')
 ORDER BY [IO] DESC;
+
+-- скрипт для лачей
+select   session_id, wait_duration_ms,   resource_description      from    sys.dm_os_waiting_tasks where   wait_type like ‘PAGE%LATCH_%’ and              resource_description like ‘2:%’
+
+-- Высокая загрузка CPU на сервере СУБД
+SELECT
+SUM(qs.max_elapsed_time) as elapsed_time,
+SUM(qs.total_worker_time) as worker_time
+into T1 FROM (
+       select top 100000
+       *
+       from
+       sys.dm_exec_query_stats qs
+       where qs.last_execution_time > (CURRENT_TIMESTAMP - '01:00:00.000')
+       order by qs.last_execution_time desc
+) as qs
+;
+ 
+
+select top 10000
+(qs.max_elapsed_time) as elapsed_time,
+(qs.total_worker_time) as worker_time,
+qp.query_plan,
+st.text,
+dtb.name,
+qs.*,
+st.dbid
+INTO T2
+FROM
+sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_query_plan(qs.plan_handle) qp
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) st
+left outer join sys.databases as dtb on st.dbid = dtb.database_id
+where qs.last_execution_time > (CURRENT_TIMESTAMP - '01:00:00.000')
+order by qs.last_execution_time desc
+;
+select top 100
+(T2.elapsed_time*100/T1.elapsed_time) as percent_elapsed_time,
+(T2.worker_time*100/T1.worker_time) as percent_worker_time,
+T2.*
+from
+T2 as T2
+INNER JOIN T1 as T1
+ON 1=1
+order by T2.worker_time desc
+;
+drop table T2
+;
+drop table T1
+;
+
+-- Нагрузка на CPU по базам
+WITH DB_CPU_Stats
+AS
+(SELECT DatabaseID, DB_Name(DatabaseID) AS [DatabaseName], SUM(total_worker_time) AS [CPU_Time_Ms]
+FROM sys.dm_exec_query_stats AS qs
+CROSS APPLY (SELECT CONVERT(int, value) AS [DatabaseID]
+             FROM sys.dm_exec_plan_attributes(qs.plan_handle)
+             WHERE attribute = N'dbid') AS F_DB
+GROUP BY DatabaseID)
+SELECT ROW_NUMBER() OVER(ORDER BY [CPU_Time_Ms] DESC) AS [row_num],
+      DatabaseName, [CPU_Time_Ms],
+      CAST([CPU_Time_Ms] * 1.0 / SUM([CPU_Time_Ms]) OVER() * 100.0 AS DECIMAL(5, 2)) AS [CPUPercent]
+FROM DB_CPU_Stats
+WHERE DatabaseID > 4 -- system databases
+AND DatabaseID <> 32767 -- ResourceDB
+ORDER BY row_num OPTION (RECOMPILE);
+
+-- Наиболее часто выполняемые запросы
+SELECT TOP 10 
+[Execution count] = execution_count
+,[Inpidual Query] = SUBSTRING (qt.text,qs.statement_start_offset/2, 
+        (CASE WHEN qs.statement_end_offset = -1 
+           THEN LEN(CONVERT(NVARCHAR(MAX), qt.text)) * 2 
+         ELSE qs.statement_end_offset END - qs.statement_start_offset)/2)
+,[Parent Query] = qt.text
+,DatabaseName = DB_NAME(qt.dbid)
+FROM sys.dm_exec_query_stats qs
+CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
+ORDER BY [Execution count] DESC;
+
