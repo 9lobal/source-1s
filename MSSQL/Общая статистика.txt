@@ -502,3 +502,27 @@ FROM sys.dm_exec_query_stats qs
 CROSS APPLY sys.dm_exec_sql_text(qs.sql_handle) as qt
 ORDER BY [Execution count] DESC;
 
+-- размеры таблиц в базе
+USE [DatabaseName]
+GO
+CREATE TABLE #temp (
+table_name sysname ,
+row_count INT,
+reserved_size VARCHAR(50),
+data_size VARCHAR(50),
+index_size VARCHAR(50),
+unused_size VARCHAR(50))
+SET NOCOUNT ON
+INSERT #temp
+EXEC sp_msforeachtable 'sp_spaceused ''?'''
+SELECT a.table_name,
+a.row_count,
+COUNT(*) AS col_count,
+a.data_size
+FROM #temp a
+INNER JOIN information_schema.columns b
+ON a.table_name collate database_default
+= b.table_name collate database_default
+GROUP BY a.table_name, a.row_count, a.data_size
+ORDER BY CAST(REPLACE(a.data_size, ' KB', '') AS integer) DESC
+DROP TABLE #temp
